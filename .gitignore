@@ -1,0 +1,18 @@
+# Never commit deployment-specific secrets or generated build output.
+secrets.yaml
+secrets.*
+!secrets.example.yaml
+!secrets.example.yml
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+*.ota
+.esphome/
+.pioenvs/
+.vscode/
+__pycache__/
+*.py[cod]
