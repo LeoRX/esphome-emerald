@@ -127,9 +127,15 @@ void Emerald::decode_power_frame_(const uint8_t *data, uint16_t length) {
 void Emerald::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
                                   esp_ble_gattc_cb_param_t *param) {
   switch (event) {
+    case ESP_GATTC_CONNECT_EVT:
+      ESP_LOGI(TAG, "Emerald BLE connected; awaiting service discovery");
+      break;
     case ESP_GATTC_SEARCH_CMPL_EVT:
-      this->discover_characteristics_();
-      this->configure_after_auth_();
+      ESP_LOGI(TAG, "Emerald service discovery completed with status %d", param->search_cmpl.status);
+      if (param->search_cmpl.status == ESP_GATT_OK) {
+        this->discover_characteristics_();
+        this->configure_after_auth_();
+      }
       break;
     case ESP_GATTC_READ_CHAR_EVT:
       if (param->read.conn_id != this->parent()->get_conn_id() || param->read.status != ESP_GATT_OK)
@@ -160,6 +166,7 @@ void Emerald::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gatt
       }
       break;
     case ESP_GATTC_DISCONNECT_EVT:
+      ESP_LOGW(TAG, "Emerald BLE disconnected; reason %d", param->disconnect.reason);
       this->characteristics_ready_ = false;
       this->authenticated_ = false;
       this->configured_ = false;
