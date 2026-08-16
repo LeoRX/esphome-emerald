@@ -50,13 +50,18 @@ void Emerald::configure_after_auth_() {
     return;
 
   this->pending_notify_registrations_ = 2;
-  const auto notify_status = this->parent()->register_for_notify(this->time_read_handle_);
+  // ESPHome 2026.7.4's BLEClient wrapper does not expose a notification-registration helper.
+  // Use the stable ESP-IDF operation directly; REG_FOR_NOTIFY events below keep this component's
+  // own subscription lifecycle explicit before it reports itself established.
+  const auto notify_status = esp_ble_gattc_register_for_notify(
+      this->parent()->get_gattc_if(), this->parent()->get_remote_bda(), this->time_read_handle_);
   if (notify_status != ESP_OK) {
     this->pending_notify_registrations_ = 0;
     ESP_LOGW(TAG, "Unable to register for Emerald power notifications: %d", notify_status);
     return;
   }
-  const auto battery_notify_status = this->parent()->register_for_notify(this->battery_handle_);
+  const auto battery_notify_status = esp_ble_gattc_register_for_notify(
+      this->parent()->get_gattc_if(), this->parent()->get_remote_bda(), this->battery_handle_);
   if (battery_notify_status != ESP_OK) {
     this->pending_notify_registrations_ = 0;
     ESP_LOGW(TAG, "Unable to register for Emerald battery notifications: %d", battery_notify_status);
