@@ -34,22 +34,33 @@ void Emerald::discover_characteristics_() {
                                                          EMERALD_CHARACTERISTIC_TIME_WRITE_UUID);
   auto *battery = this->parent()->get_characteristic(EMERALD_BATTERY_SERVICE_UUID,
                                                       EMERALD_BATTERY_CHARACTERISTIC_UUID);
-  if (time_read == nullptr || time_write == nullptr || battery == nullptr) {
-    ESP_LOGW(TAG, "Required Emerald GATT characteristics were not found");
+  // Power is the sole outage-critical characteristic. Emerald units may omit or
+  // restrict the standard Battery Service, so battery must never block power setup.
+  if (time_read == nullptr || time_write == nullptr) {
+    ESP_LOGW(TAG, "Required Emerald power GATT characteristics were not found");
     return;
   }
 
   this->time_read_handle_ = time_read->handle;
   this->time_write_handle_ = time_write->handle;
-  this->battery_handle_ = battery->handle;
+  if (battery != nullptr) {
+    this->battery_handle_ = battery->handle;
+  } else {
+    ESP_LOGW(TAG, "Emerald battery characteristic unavailable; continuing with power only");
+  }
   this->characteristics_ready_ = true;
+  ESP_LOGI(TAG, "Emerald power GATT discovered; battery %s", battery == nullptr ? "unavailable" : "available");
 }
 
 void Emerald::configure_after_auth_() {
-  if (!this->authenticated_ || !this->characteristics_ready_ || this->configured_)
+  // Existing ESPHome BLE bonds do not necessarily emit a fresh AUTH_CMPL event
+  // after a firmware update. Service discovery proves the client is connected;
+  // the following GATT operations will still fail safely if the peer requires
+  // authentication that has not completed.
+  if (!this->characteristics_ready_ || this->configured_)
     return;
 
-  this->pending_notify_registrations_ = 2;
+  this->pending_notify_registrations_ = 1;
   // ESPHome 2026.7.4's BLEClient wrapper does not expose a notification-registration helper.
   // Use the stable ESP-IDF operation directly; REG_FOR_NOTIFY events below keep this component's
   // own subscription lifecycle explicit before it reports itself established.
@@ -60,13 +71,7 @@ void Emerald::configure_after_auth_() {
     ESP_LOGW(TAG, "Unable to register for Emerald power notifications: %d", notify_status);
     return;
   }
-  const auto battery_notify_status = esp_ble_gattc_register_for_notify(
-      this->parent()->get_gattc_if(), this->parent()->get_remote_bda(), this->battery_handle_);
-  if (battery_notify_status != ESP_OK) {
-    this->pending_notify_registrations_ = 0;
-    ESP_LOGW(TAG, "Unable to register for Emerald battery notifications: %d", battery_notify_status);
-    return;
-  }
+  ESP_LOGI(TAG, "Emerald power notification registration requested");
 
   const auto write_status = esp_ble_gattc_write_char(
       this->parent()->get_gattc_if(), this->parent()->get_conn_id(), this->time_write_handle_,
@@ -76,12 +81,13 @@ void Emerald::configure_after_auth_() {
     ESP_LOGW(TAG, "Unable to enable Emerald automatic uploads: %d", write_status);
     return;
   }
+  ESP_LOGI(TAG, "Emerald automatic-upload command queued");
 
-  const auto read_status = esp_ble_gattc_read_char(this->parent()->get_gattc_if(), this->parent()->get_conn_id(),
-                                                   this->battery_handle_, ESP_GATT_AUTH_REQ_NONE);
-  if (read_status != ESP_OK) {
-    ESP_LOGW(TAG, "Unable to request Emerald battery level: %d", read_status);
-    return;
+  if (this->battery_handle_ != 0) {
+    const auto read_status = esp_ble_gattc_read_char(this->parent()->get_gattc_if(), this->parent()->get_conn_id(),
+                                                     this->battery_handle_, ESP_GATT_AUTH_REQ_NONE);
+    if (read_status != ESP_OK)
+      ESP_LOGW(TAG, "Unable to request optional Emerald battery level: %d", read_status);
   }
 
   this->configured_ = true;
@@ -145,12 +151,12 @@ void Emerald::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gatt
                  param->reg_for_notify.status);
         break;
       }
-      if ((param->reg_for_notify.handle == this->time_read_handle_ ||
-           param->reg_for_notify.handle == this->battery_handle_) &&
-          this->pending_notify_registrations_ > 0) {
+      if (param->reg_for_notify.handle == this->time_read_handle_ && this->pending_notify_registrations_ > 0) {
         this->pending_notify_registrations_--;
-        if (this->pending_notify_registrations_ == 0)
+        if (this->pending_notify_registrations_ == 0) {
           this->node_state = espbt::ClientState::ESTABLISHED;
+          ESP_LOGI(TAG, "Emerald power notifications established");
+        }
       }
       break;
     case ESP_GATTC_DISCONNECT_EVT:
