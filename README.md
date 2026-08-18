@@ -1,42 +1,92 @@
 # ESPHome Emerald BLE
 
-A maintained, narrow ESPHome external component for Emerald Energy Adviser BLE monitors.
+A maintained ESPHome external component for Emerald Energy Adviser BLE monitors. It uses stock ESPHome BLE primitives and only implements the Emerald-specific protocol.
 
-## Status
+## What it does
 
-**Development / not production-ready.** This repository is being rebuilt to remove an abandoned 2023 fork of ESPHome core BLE components. It will retain only the Emerald-specific protocol handling and target current upstream ESPHome BLE APIs.
+- discovers GATT characteristics by UUID rather than fixed handles;
+- authenticates through ESPHome's native BLE passkey callback;
+- publishes validated instantaneous **power** readings and optional battery telemetry;
+- deliberately does **not** publish a device-RAM lifetime or daily-energy counter.
 
-The `components/emerald_ble` directory is deliberately **not published as deployable firmware code until the native port is complete and reviewed**. It contains no production release at this time.
+That last point matters: the ESP32 is a live measurement transport, not the accounting system. Home Assistant owns durable energy accounting.
 
-## Design
+## Status and supported baseline
 
-The planned component will provide:
+`v0.1.0` is the first pinned public release for the native component. It has protocol-vector tests and has been validated against current ESPHome BLE APIs. Use **ESPHome 2026.7 or newer**.
 
-- native upstream `ble_client` and `esp32_ble_tracker`;
-- Emerald passkey pairing through native `on_passkey_request`;
-- UUID-based GATT characteristic discovery, never fixed handles;
-- validated 30-second power notifications;
-- battery telemetry;
-- durable energy accounting in Home Assistant: an Integration helper sourced from power, then a daily Utility Meter.
+This repository contains no production secrets, MAC addresses, credentials, packet captures, firmware images, or deployment YAML.
 
-It has **no RAM energy** or daily-energy sensors: device-RAM counters are not treated as authoritative lifetime or daily energy totals.
+## ESPHome setup
 
-## Example configuration
+Copy [`examples/probe.example.yaml`](examples/probe.example.yaml) **outside this repository** and create a local `secrets.yaml`. Keep both private.
 
-[`examples/probe.example.yaml`](examples/probe.example.yaml) is a non-deployable outline. It deliberately references a future immutable release tag/commit instead of a mutable branch. Do not replace it with `main` on a live meter.
+Pin the component to a release tag (or a full reviewed commit) rather than `main`:
 
-Use ESPHome release 2026.7 or later while this port is validated. The initial target is an `esp32dev` board using Arduino; no board, GPIO, or wiring assumptions are made beyond that.
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/LeoRX/esphome-emerald
+      ref: v0.1.0
+      path: components
+    components: [emerald_ble]
+```
 
-## Security
+The component needs stock ESPHome BLE support plus one `ble_client` with `auto_connect: true` and an `on_passkey_request` handler. The non-deployable example shows the full shape.
 
-This is a public project. Never commit `secrets.yaml`, live YAML, MAC addresses, IP addresses, API keys, OTA passwords, Wi-Fi credentials, pairing codes, packet captures containing identifying data, or build artefacts. The example uses `!secret` placeholders on purpose.
+### Safe deployment
 
-## Safe migration rule
+1. Make a private backup of your existing ESPHome YAML and, where possible, a serial flash backup.
+2. Compile before upload; do not let a live deployment pull an unreviewed mutable branch.
+3. OTA normally preserves ESP32 NVS/BLE bonds. Do **not** erase flash merely to update the component.
+4. After upload, verify that power changes over time—not just that one old value remains displayed.
+5. Keep a serial recovery path for a sole production probe.
 
-Do **not** OTA this implementation onto the only production probe. Compile and test it on a spare ESP32 first, compare against the existing probe for at least 24 hours, then promote it only after verified BLE reconnect and measurement behaviour.
+## Home Assistant setup: durable grid-import accounting
 
-## Test
+The `power` entity is watts and **must not** be used directly in Energy Dashboard. Create an Integration helper from it:
+
+- Source: your Emerald power sensor
+- Method: `left`
+- Unit prefix: `k`
+- Unit time: `h`
+- Maximum sub-interval: `30 seconds`
+
+This creates a cumulative `kWh` entity with `device_class: energy` and an eligible energy state class. Use it as the canonical source for all accounting.
+
+### Tariff meters
+
+Create one multi-tariff Utility Meter sourced from the cumulative HA energy entity:
+
+- Reset cycle: **Daily**
+- Reset offset: **0 days**
+- Supported tariffs: `free`, `offpeak`, `peak`
+- Net consumption: **off**
+- Delta values: **off**
+- Periodically resetting: **off** (the HA energy source is monotonic)
+- Sensor always available: **off**
+
+Use the generated tariff sensors as **Grid consumption** sources in Energy Dashboard. Keep your tariff-switching automation pointed at the generated `select` entity. Do not add solar/export sources unless the physical meter truly measures them.
+
+### Availability and limitations
+
+Use a sustained-outage alert (ten minutes is sensible) for the Emerald power entity. HA's Integration helper survives ESP32 resets, but it cannot reconstruct energy during intervals where the meter, BLE connection, ESP32, or HA provides no power samples. Accounting resumes when telemetry returns.
+
+## Updating or migrating
+
+If replacing a previous device-side kWh sensor, recreate or repoint tariff Utility Meters to the HA-owned cumulative source. Preserve tariff names and the generated entity IDs where possible. Do not feed a Utility Meter from an old volatile ESP32 total.
+
+## Development
+
+Run the protocol tests locally:
 
 ```sh
 python3 -m unittest discover -s tests -v
 ```
+
+GitHub Actions runs the same test vector suite on push and pull requests.
+
+## Security
+
+Never commit live YAML, `secrets.yaml`, MAC/IP addresses, API keys, OTA passwords, Wi-Fi credentials, pairing codes, or build artefacts. See [SECURITY.md](SECURITY.md).

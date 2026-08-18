@@ -1,5 +1,5 @@
 # Copy to probe.yaml **outside this repository** and provide values through a local secrets.yaml.
-# This outline is intentionally non-deployable until a reviewed release tag exists.
+# This outline is intentionally non-deployable: copy it outside this repository and use private secrets.
 esphome:
   name: emerald-probe
   friendly_name: Emerald Energy Monitor
@@ -13,7 +13,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/LeoRX/esphome-emerald
-      ref: <REVIEWED-IMMUTABLE-RELEASE-TAG-OR-COMMIT>
+      ref: v0.1.0
       path: components
     components: [emerald_ble]
 
